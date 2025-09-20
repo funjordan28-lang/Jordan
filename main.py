@@ -54,6 +54,7 @@ def fetch_all_data_for_query(query, headers):
                 # Add search_url field to each hit and add to all_data
                 for hit in hits:
                     hit['search_url'] = url
+                    hit['search_query'] = query
                     if "cardId" in hit and hit["cardId"] != "" and hit["cardId"] is not None:
                         hit["Verified"] = True 
                     else:
