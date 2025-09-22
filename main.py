@@ -7,7 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 url = "https://search-zzvl7ri3bq-uc.a.run.app/search?index=salesarchive&query=1984%20Star%20Michael%20Jordan%20101&page=1&limit=20&filters=&sort=date&direction=desc"
-
+from test_data_integrity import test_data_integrity
 headers = {
     "accept": "application/json, text/plain, */*",
     "accept-language": "en-US,en;q=0.9",
@@ -105,7 +105,7 @@ def fetch_data_multithreaded():
         processed_queries = mongo_handler.get_processed_queries_from_db()
         
         # Filter out already processed queries
-        queries_to_process = [query for query in input_data['Queries'] if query not in processed_queries]
+        queries_to_process = test_data_integrity()
         
         if not queries_to_process:
             print("✓ All queries have already been processed!")
