@@ -3,7 +3,7 @@ MYSQL_CONFIG = {
     "port": 3306, 
     "database": "Jordan",
     "user": "root",
-    "password": "@Dipuk656wx"
+    "password": "rootPassword"
 }
 
 # API headers for CardLadder requests
