@@ -1,6 +1,6 @@
 import requests
 from urllib.parse import urlencode, quote
-from utils import read_excel_to_dict, save_data_to_mongodb, MongoDBHandler
+from utils import read_excel_to_dict, save_data_to_sql, SQLDBHandler
 import math
 import time
 import threading
@@ -8,22 +8,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-headers = {
-    "accept": "application/json, text/plain, */*",
-    "accept-language": "en-US,en;q=0.9",
-    "authorization": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IjUwMDZlMjc5MTVhMTcwYWIyNmIxZWUzYjgxZDExNjU0MmYxMjRmMjAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vY2FyZGxhZGRlci03MWQ1MyIsImF1ZCI6ImNhcmRsYWRkZXItNzFkNTMiLCJhdXRoX3RpbWUiOjE3NTgzNTA5ODAsInVzZXJfaWQiOiJwTTUzUjRXQ21nUXhqUVdwR0pRWjFSeVFWcE8yIiwic3ViIjoicE01M1I0V0NtZ1F4alFXcEdKUVoxUnlRVnBPMiIsImlhdCI6MTc1ODM1NDI4MSwiZXhwIjoxNzU4MzU3ODgxLCJlbWFpbCI6ImZ1bmpvcmRhbjI4QGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjpmYWxzZSwiZmlyZWJhc2UiOnsiaWRlbnRpdGllcyI6eyJlbWFpbCI6WyJmdW5qb3JkYW4yOEBnbWFpbC5jb20iXX0sInNpZ25faW5fcHJvdmlkZXIiOiJwYXNzd29yZCJ9fQ.jtrzg9IWu3Za_XKcYeba-RjP7H_i8V28OUQq4jBbybc0bdLuUvrn2sZuytyhjvNouhqTKQBhoSrUM4seZvdTtGuvt4Evv7r5jX0oVBtIZO4EVhcBCHepIfYPA58ZoYmqeGvDXO-nNVc0IeVn7vz2chqzZ0PasdnVK4C-AcTjV5alxyeD72ys4Yh9UqYMzuGYc1EPsqMWWWqAcoYC-ZCm_3ws74eBTFtkfyKIdlAQ0zrXB-T0EJ7mIKedS8M2tkM9P2NHn7O4hX5_rDD8sEIWDd0QeRbNKiCyDM5Q3WkAfjuUtsfxXWWg0mmB1hPtucnwtAWQvt-8JKXCJIK-l0_VIA",
-    "origin": "https://app.cardladder.com",
-    "priority": "u=1, i",
-    "referer": "https://app.cardladder.com/",
-    "sec-ch-ua": "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Brave\";v=\"140\"",
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": "\"Windows\"",
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "cross-site",
-    "sec-gpc": "1",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-}
+
+# Import headers from config
+try:
+    from config import API_HEADERS as headers
+except ImportError:
+    print("⚠️  Warning: Could not import API_HEADERS from config.py")
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "en-US,en;q=0.9",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
 
 def create_robust_session():
     """
@@ -67,76 +62,61 @@ def make_api_request_with_retry(url, headers, timeout=30):
     
     for attempt in range(1, 4):  # 3 attempts total
         try:
-            print(f"🔄 Attempt {attempt}/3 for URL: {url[:100]}...")
-            
             response = session.get(url, headers=headers, timeout=timeout)
             
             if response.status_code == 200:
-                print(f"✅ Success on attempt {attempt}")
                 return response
             else:
-                print(f"⚠️ HTTP {response.status_code} on attempt {attempt}")
+                if attempt == 3:  # Only log on final failure
+                    print(f"❌ HTTP {response.status_code} after 3 attempts: {url[:80]}...")
                 if attempt < 3:
-                    wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
-                    print(f"⏳ Waiting {wait_time}s before retry...")
-                    time.sleep(wait_time)
+                    time.sleep(2 ** attempt)  # Exponential backoff: 2, 4 seconds
                     
         except requests.exceptions.Timeout:
-            print(f"⏰ Timeout on attempt {attempt}")
+            if attempt == 3:
+                print(f"❌ Timeout after 3 attempts: {url[:80]}...")
             if attempt < 3:
-                wait_time = 2 ** attempt
-                print(f"⏳ Waiting {wait_time}s before retry...")
-                time.sleep(wait_time)
+                time.sleep(2 ** attempt)
                 
         except requests.exceptions.ConnectionError as e:
-            print(f"🌐 Connection error on attempt {attempt}: {str(e)}")
+            if attempt == 3:
+                print(f"❌ Connection error after 3 attempts: {url[:80]}...")
             if attempt < 3:
-                wait_time = 2 ** attempt
-                print(f"⏳ Waiting {wait_time}s before retry...")
-                time.sleep(wait_time)
+                time.sleep(2 ** attempt)
                 
         except requests.exceptions.RequestException as e:
-            print(f"❌ Request error on attempt {attempt}: {str(e)}")
+            if attempt == 3:
+                print(f"❌ Request error after 3 attempts: {str(e)}")
             if attempt < 3:
-                wait_time = 2 ** attempt
-                print(f"⏳ Waiting {wait_time}s before retry...")
-                time.sleep(wait_time)
+                time.sleep(2 ** attempt)
     
-    print(f"❌ All 3 attempts failed for URL: {url[:100]}...")
     return None
 
-def get_mongodb_count_for_query(mongo_handler, query):
+def get_sql_count_for_query(sql_handler, query):
     """
-    Get the number of records saved in MongoDB for a specific query
+    Get the number of records saved in SQL database for a specific query
     
     Args:
-        mongo_handler: MongoDBHandler instance
+        sql_handler: SQLDBHandler instance
         query: Search query string
         
     Returns:
-        int: Number of records in MongoDB for this query
+        int: Number of records in SQL database for this query
     """
     try:
-        # Create search pattern for the query in search_url field
-        search_pattern = f"query={quote(query)}"
-        
-        # Count documents where search_url contains this query
-        count = mongo_handler.collection.count_documents({
-            "search_url": {"$regex": search_pattern}
-        })
-        
+        count = sql_handler.get_count_for_query(query)
         return count
         
     except Exception as e:
-        print(f"❌ Error counting MongoDB records for query '{query}': {str(e)}")
+        print(f"❌ Error counting SQL records for query '{query}': {str(e)}")
         return -1
 
-def check_if_item_exists_in_db(mongo_handler, query, item_id):
+def check_if_item_exists_in_db(sql_handler, query, item_id):
     """
-    Check if a specific itemId already exists in MongoDB for a given query
+    Check if a specific itemId already exists in SQL database for a given query
     
     Args:
-        mongo_handler: MongoDBHandler instance
+        sql_handler: SQLDBHandler instance
         query: Search query string
         item_id: The itemId to check
         
@@ -144,34 +124,28 @@ def check_if_item_exists_in_db(mongo_handler, query, item_id):
         bool: True if item exists, False otherwise
     """
     try:
-        search_pattern = f"query={quote(query)}"
-        
-        # Check if document exists with this itemId and query
-        count = mongo_handler.collection.count_documents({
-            "search_url": {"$regex": search_pattern},
-            "itemId": item_id
-        })
-        
-        return count > 0
+        exists = sql_handler.check_item_exists(item_id)
+        return exists
         
     except Exception as e:
         print(f"❌ Error checking if item exists: {str(e)}")
         return False
 
-def fetch_all_data_for_query_optimized(query, headers, mongo_handler):
+def fetch_all_data_for_query_optimized(queryAndTierTuple, headers, sql_handler):
     """
     Optimized: Fetch data for query with smart early stopping and minimal API calls
     
     Args:
         query: Search query string
         headers: HTTP headers for the request
-        mongo_handler: MongoDBHandler instance
+        sql_handler: SQLDBHandler instance
     
     Returns:
         List of all hits data from all pages (new records only)
     """
     # Step 1: Get current DB count
-    db_count = get_mongodb_count_for_query(mongo_handler, query)
+    query, tier = queryAndTierTuple
+    db_count = get_sql_count_for_query(sql_handler, query)
     if db_count == -1:
         print(f"❌ Error getting DB count for query '{query}' - skipping")
         return []
@@ -200,19 +174,17 @@ def fetch_all_data_for_query_optimized(query, headers, mongo_handler):
                 # Smart decision: Check if update needed (only on first page)
                 if page == 0:
                     if db_count >= total_hits:
-                        print(f"✅ Query '{query[:50]}...' already complete: DB={db_count}, API={total_hits}")
-                        return []  # No update needed
-                    else:
-                        print(f"🔄 Query '{query[:50]}...' needs processing: DB={db_count}, API={total_hits}")
-
+                        return []  # No update needed, silent return
+                    # Only show progress for queries that need processing
+                
                 if not hits:
-                    print("❌ No hits found, stopping.")
                     break
                 
                 # Add search_url field to each hit and add to all_data
                 for hit in hits:
                     hit['search_url'] = url
                     hit['search_query'] = query
+                    hit['Tier'] = tier
                     if "cardId" in hit and hit["cardId"] != "" and hit["cardId"] is not None:
                         hit["Verified"] = True 
                     else:
@@ -225,7 +197,6 @@ def fetch_all_data_for_query_optimized(query, headers, mongo_handler):
                 
                 # Check if we've reached the end
                 if len(hits) < limit:
-                    print("❌ Limit reached, stopping.")
                     break
                 
                 # Calculate if there are more pages
@@ -239,14 +210,14 @@ def fetch_all_data_for_query_optimized(query, headers, mongo_handler):
                 time.sleep(0.5)
                 
             elif response:
-                print(f"❌ Failed to fetch page {page} for query '{query}'. Status code: {response.status_code}")
+                print(f"❌ API error {response.status_code} for query '{query[:30]}...'")
                 break
             else:
-                print(f"❌ Failed to fetch page {page} for query '{query}' after 3 retry attempts")
+                print(f"❌ Failed to fetch data for query '{query[:30]}...' after retries")
                 break
                 
         except Exception as e:
-            print(f"❌ Error fetching page {page} for query '{query}': {str(e)}")
+            print(f"❌ Error processing query '{query[:30]}...': {str(e)}")
             break
     
     return all_data
@@ -254,26 +225,32 @@ def fetch_all_data_for_query_optimized(query, headers, mongo_handler):
 
 def fetch_data_multithreaded():
     """
-    Fetch data using optimized multithreading with batches of 50 queries and save to MongoDB
+    Fetch data using optimized multithreading with batches of 50 queries and save to SQL database
     """
-    # Initialize MongoDB handler
-    mongo_handler = MongoDBHandler()
-    if not mongo_handler.connect():
-        print("❌ Failed to connect to MongoDB. Exiting.")
+    # Try to load config if it exists
+    try:
+        from config import MYSQL_CONFIG
+        # Use larger pool size for better multithreading performance
+        sql_handler = SQLDBHandler(pool_size=60, **MYSQL_CONFIG)
+    except ImportError:
+        print("📋 No config.py found, using default settings")
+        sql_handler = SQLDBHandler(pool_size=60)
+    
+    if not sql_handler.connect():
+        print("❌ Database connection failed")
         return
     
     try:
         # Read input queries
-        print("📖 Reading queries from input.xlsx...")
-        input_data = read_excel_to_dict('input.xlsx', columns=['Queries'])
+        input_data = read_excel_to_dict('input.xlsx', columns=['Queries', 'Tier'])
         all_queries = input_data['Queries']
-        
-        if not all_queries:
+        all_tiers = input_data['Tier']
+
+        if not all_queries or not all_tiers:
             print("⚠️ No queries found in input.xlsx")
             return
         
-        print(f"📊 Found {len(all_queries)} queries to process")
-        print("🚀 Starting optimized multithreaded processing...\n")
+        print(f"📊 Processing {len(all_queries)} queries from input.xlsx")
         
         # Process queries in batches of 50
         batch_size = 50
@@ -293,11 +270,12 @@ def fetch_data_multithreaded():
             start_idx = batch_num * batch_size
             end_idx = min(start_idx + batch_size, len(all_queries))
             batch_queries = all_queries[start_idx:end_idx]
-            
-            print(f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_queries)} queries)")
+            tiers = all_tiers[start_idx:end_idx]
+            combinedTierandQuery =[(q, t) for q, t in zip(batch_queries, tiers)]
+            print(f"🔄 Batch {batch_num + 1}/{total_batches} ({len(batch_queries)} queries)")
             
             # Process batch with multithreading
-            batch_results = process_queries_batch_optimized(batch_queries, headers, mongo_handler)
+            batch_results = process_queries_batch_optimized(combinedTierandQuery, headers, sql_handler)
             
             # Update global statistics
             global_stats['total_queries_processed'] += len(batch_queries)
@@ -311,53 +289,33 @@ def fetch_data_multithreaded():
             global_stats['queries_processed'] += queries_with_data
             global_stats['queries_up_to_date'] += len(batch_queries) - queries_with_data
             
-            print(f"✅ Batch {batch_num + 1} completed - Records: {batch_results['total_records']}, Inserted: {batch_results['total_inserted']}")
+            print(f"📦 Batch {batch_num + 1}/{total_batches}: {batch_results['total_inserted']} new records")
             
             # Small delay between batches to be respectful
             if batch_num < total_batches - 1:
                 time.sleep(2)
         
-        # Final comprehensive summary
-        total_db_records = mongo_handler.get_total_records()
-        print(f"\n{'='*70}")
-        print(f"🎉 PROCESSING COMPLETED SUCCESSFULLY")
-        print(f"{'='*70}")
-        print(f"📊 Processing Summary:")
-        print(f"   Total queries in input.xlsx: {len(all_queries)}")
-        print(f"   Queries processed: {global_stats['total_queries_processed']}")
-        print(f"   Queries already up-to-date: {global_stats['queries_up_to_date']}")
-        print(f"   Queries that needed processing: {global_stats['queries_processed']}")
-        print(f"")
-        print(f"📈 Data Summary:")
-        print(f"   Total records fetched: {global_stats['total_records']}")
-        print(f"   New records inserted: {global_stats['total_inserted']}")
-        print(f"   Duplicates skipped: {global_stats['total_duplicates']}")
-        print(f"   Errors encountered: {global_stats['total_errors']}")
-        print(f"")
-        print(f"🗄️ Database Status:")
-        print(f"   Total records in MongoDB: {total_db_records:,}")
-        print(f"   Database: Jordan, Collection: sales")
-        
-        if global_stats['total_inserted'] > 0:
-            print(f"\n✅ Successfully processed {global_stats['total_inserted']:,} new records!")
-        else:
-            print(f"\n✅ All queries were already up-to-date!")
+        # Final summary
+        total_db_records = sql_handler.get_total_records()
+        print(f"\n🎉 COMPLETED - {global_stats['total_inserted']:,} new records added")
+        print(f"� Total queries: {len(all_queries)} | New records: {global_stats['total_inserted']:,} | Total in DB: {total_db_records:,}")
+        if global_stats['total_errors'] > 0:
+            print(f"⚠️  {global_stats['total_errors']} errors encountered")
         
     except Exception as e:
-        print(f"❌ Fatal error in fetch_data_multithreaded: {str(e)}")
+        print(f"❌ Fatal error: {str(e)}")
     finally:
-        mongo_handler.close_connection()
-        print(f"\n🔒 MongoDB connection closed")
+        sql_handler.close_connection()
 
 
-def process_queries_batch_optimized(queries, headers, mongo_handler):
+def process_queries_batch_optimized(queries, headers, sql_handler):
     """
     Process a batch of queries using optimized multithreading approach
     
     Args:
         queries: List of queries to process
         headers: HTTP headers for requests
-        mongo_handler: MongoDBHandler instance
+        sql_handler: SQLDBHandler instance
         
     Returns:
         Dictionary with batch processing results
@@ -380,11 +338,11 @@ def process_queries_batch_optimized(queries, headers, mongo_handler):
         
         try:
             # Fetch data using optimized approach
-            query_data = fetch_all_data_for_query_optimized(query, headers, mongo_handler)
+            query_data = fetch_all_data_for_query_optimized(query, headers, sql_handler)
             
             if query_data:
-                # Save to MongoDB
-                save_result = save_data_to_mongodb(query_data, mongo_handler)
+                # Save to SQL database
+                save_result = save_data_to_sql(query_data, sql_handler)
                 
                 with stats_lock:
                     batch_results['queries_processed'] += 1
@@ -394,7 +352,8 @@ def process_queries_batch_optimized(queries, headers, mongo_handler):
                     batch_results['total_errors'] += save_result['errors']
                 
                 with print_lock:
-                    print(f"✅ Query {query_index}: {len(query_data)} records, {save_result['inserted']} inserted")
+                    # Only show output for queries that actually had work to do
+                    print(f"✅ Query {query_index}: {len(query_data)} records, {save_result['inserted']} new")
             # No need to print anything for up-to-date queries (already handled in fetch function)
                     
         except Exception as e:

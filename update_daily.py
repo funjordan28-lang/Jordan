@@ -9,30 +9,23 @@ Efficiently updates the database by:
 
 import requests
 from urllib.parse import quote
-from utils import MongoDBHandler, save_data_to_mongodb, read_excel_to_dict
+from utils import SQLDBHandler, save_data_to_sql, read_excel_to_dict
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import math
 
-# API headers (same as main.py)
-headers = {
-    "accept": "application/json, text/plain, */*",
-    "accept-language": "en-US,en;q=0.9",
-    "authorization": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IjA1NTc3MjZmYWIxMjMxZmEyZGNjNTcyMWExMDgzZGE2ODBjNGE3M2YiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vY2FyZGxhZGRlci03MWQ1MyIsImF1ZCI6ImNhcmRsYWRkZXItNzFkNTMiLCJhdXRoX3RpbWUiOjE3NTg4ODgyNzMsInVzZXJfaWQiOiJwTTUzUjRXQ21nUXhqUVdwR0pRWjFSeVFWcE8yIiwic3ViIjoicE01M1I0V0NtZ1F4alFXcEdKUVoxUnlRVnBPMiIsImlhdCI6MTc1ODg4ODI3MywiZXhwIjoxNzU4ODkxODczLCJlbWFpbCI6ImZ1bmpvcmRhbjI4QGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjpmYWxzZSwiZmlyZWJhc2UiOnsiaWRlbnRpdGllcyI6eyJlbWFpbCI6WyJmdW5qb3JkYW4yOEBnbWFpbC5jb20iXX0sInNpZ25faW5fcHJvdmlkZXIiOiJwYXNzd29yZCJ9fQ.jSy0bb6WXkF_HfEelcGDVfgj9XqsPayjEDUzP1zQH28pgz87CXxPjjyQbSw4bwhJdvfLawbVRaX0HRn1hIUbvzF9T20SQM1JrTAf5sFG2u3Q8FM_oP9xGtpuQcMhOGyX_UgiVHWNZ_RD0AR4DsubaYiuFVFLwqeLRbi0YCotq0P4iZgpHzfp4MOcgmr-B4Gdgw9jBvOOzcyK_TQSPZbD-WvLd-ryQlzDt8oR5XRa3pgenLNZoJ4Oa5QGgy6TykTxK-ZDTw3sNtWTnmwcjGX2Jvwn8U280PmekGoFz6NLIwQflMw40n_ufxsCszXsw2vdnVoyZQECkDpqzCC8mNwuyg",
-    "origin": "https://app.cardladder.com",
-    "priority": "u=1, i",
-    "referer": "https://app.cardladder.com/",
-    "sec-ch-ua": "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Brave\";v=\"140\"",
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": "\"Windows\"",
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "cross-site",
-    "sec-gpc": "1",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-}
+# Import headers from config
+try:
+    from config import API_HEADERS as headers
+except ImportError:
+    print("⚠️  Warning: Could not import API_HEADERS from config.py")
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "en-US,en;q=0.9",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
 
 def get_api_total_for_query(query):
     """
@@ -62,37 +55,30 @@ def get_api_total_for_query(query):
         print(f"❌ Exception getting API total for query '{query}': {str(e)}")
         return -1
 
-def get_mongodb_count_for_query(mongo_handler, query):
+def get_sql_count_for_query(sql_handler, query):
     """
-    Get the number of records saved in MongoDB for a specific query
+    Get the number of records saved in SQL database for a specific query
     
     Args:
-        mongo_handler: MongoDBHandler instance
+        sql_handler: SQLDBHandler instance
         query: Search query string
         
     Returns:
-        int: Number of records in MongoDB for this query
+        int: Number of records in SQL database for this query
     """
     try:
-        # Create search pattern for the query in search_url field
-        search_pattern = f"query={quote(query)}"
-        
-        # Count documents where search_url contains this query
-        count = mongo_handler.collection.count_documents({
-            "search_url": {"$regex": search_pattern}
-        })
-        
+        count = sql_handler.get_count_for_query(query)
         return count
         
     except Exception as e:
-        print(f"❌ Error counting MongoDB records for query '{query}': {str(e)}")
+        print(f"❌ Error counting SQL records for query '{query}': {str(e)}")
         return -1
-def check_if_item_exists_in_db(mongo_handler, query, item_id):
+def check_if_item_exists_in_db(sql_handler, query, item_id):
     """
-    Check if a specific itemId already exists in MongoDB for a given query
+    Check if a specific itemId already exists in SQL database for a given query
     
     Args:
-        mongo_handler: MongoDBHandler instance
+        sql_handler: SQLDBHandler instance
         query: Search query string
         item_id: The itemId to check
         
@@ -100,34 +86,35 @@ def check_if_item_exists_in_db(mongo_handler, query, item_id):
         bool: True if item exists, False otherwise
     """
     try:
-        search_pattern = f"query={quote(query)}"
-        
-        # Check if document exists with this itemId and query
-        count = mongo_handler.collection.count_documents({
-            "search_url": {"$regex": search_pattern},
-            "itemId": item_id
-        })
-        
-        return count > 0
+        exists = sql_handler.check_item_exists(item_id)
+        return exists
         
     except Exception as e:
         print(f"❌ Error checking if item exists: {str(e)}")
         return False
 
-def fetch_new_data_for_query_optimized(query, headers, mongo_handler):
+def fetch_new_data_for_query_optimized(query_and_tier_tuple, headers, sql_handler):
     """
     Optimized: Make single API call to determine if update needed, then process efficiently
     
     Args:
-        query: Search query string
+        query_and_tier_tuple: Tuple containing (query, tier) 
         headers: HTTP headers for the request
-        mongo_handler: MongoDBHandler instance
+        sql_handler: SQLDBHandler instance
     
     Returns:
         List of new data (items not yet in database)
     """
+    # Extract query and tier from tuple
+    if isinstance(query_and_tier_tuple, tuple):
+        query, tier = query_and_tier_tuple
+    else:
+        # Fallback for backward compatibility
+        query = query_and_tier_tuple
+        tier = ""
+    
     # Step 1: Get current DB count
-    db_count = get_mongodb_count_for_query(mongo_handler, query)
+    db_count = get_sql_count_for_query(sql_handler, query)
     if db_count == -1:
         print(f"❌ Error getting DB count for query '{query}' - skipping")
         return []
@@ -168,6 +155,9 @@ def fetch_new_data_for_query_optimized(query, headers, mongo_handler):
                 for hit in hits:
                     # Add metadata
                     hit['search_url'] = url
+                    hit['search_query'] = query  # Add search query
+                    hit['Tier'] = tier  # Add tier information (capital T to match main.py)
+                    
                     if "cardId" in hit and hit["cardId"] != "" and hit["cardId"] is not None:
                         hit["Verified"] = True
                     else:
@@ -177,7 +167,7 @@ def fetch_new_data_for_query_optimized(query, headers, mongo_handler):
                     
                     # Check if this item already exists in our database
                     if "itemId" in hit and hit["itemId"]:
-                        if check_if_item_exists_in_db(mongo_handler, query, hit["itemId"]):
+                        if check_if_item_exists_in_db(sql_handler, query, hit["itemId"]):
                             found_existing = True
                             print(f"✅ Found existing itemId '{hit['itemId']}' - stopping pagination")
                             break
@@ -211,19 +201,26 @@ def fetch_new_data_for_query_optimized(query, headers, mongo_handler):
     
     return new_data
 
-def process_single_query_update(query_info, mongo_handler, print_lock, stats_lock, batch_results):
+def process_single_query_update(query_info, sql_handler, print_lock, stats_lock, batch_results):
     """
     Process a single query for daily update with optimized logic
     """
-    query_index, query = query_info
+    query_index, query_and_tier_tuple = query_info
+    
+    # Extract query from tuple for display
+    if isinstance(query_and_tier_tuple, tuple):
+        query, tier = query_and_tier_tuple
+    else:
+        query = query_and_tier_tuple
+        tier = ""
     
     try:
         # Fetch new data using optimized approach (single API call decision)
-        new_data = fetch_new_data_for_query_optimized(query, headers, mongo_handler)
+        new_data = fetch_new_data_for_query_optimized(query_and_tier_tuple, headers, sql_handler)
         
         if new_data:
-            # Save to MongoDB
-            save_result = save_data_to_mongodb(new_data, mongo_handler)
+            # Save to SQL database
+            save_result = save_data_to_sql(new_data, sql_handler)
             
             with stats_lock:
                 batch_results['total_records'] += len(new_data)
@@ -250,23 +247,39 @@ def update_daily():
     print("🔄 Starting Daily Update Process")
     print("=" * 60)
     
-    # Initialize MongoDB handler
-    mongo_handler = MongoDBHandler()
-    if not mongo_handler.connect():
-        print("❌ Failed to connect to MongoDB. Exiting.")
+    # Try to load config if it exists
+    try:
+        from config import MYSQL_CONFIG
+        print("📋 Using configuration from config.py")
+        sql_handler = SQLDBHandler(pool_size=30, **MYSQL_CONFIG)
+    except ImportError:
+        print("📋 No config.py found, using default settings")
+        sql_handler = SQLDBHandler(pool_size=30)
+    
+    if not sql_handler.connect():
+        print("❌ Failed to connect to SQL database. Exiting.")
+        print("💡 Try running 'python test_mysql_connection.py' to test your connection")
         return
     
     try:
-        # Step 1: Read queries from input.xlsx
-        print("📖 Reading queries from input.xlsx...")
-        input_data = read_excel_to_dict('input.xlsx', columns=['Queries'])
+        # Step 1: Read queries and tiers from input.xlsx
+        print("📖 Reading queries and tiers from input.xlsx...")
+        input_data = read_excel_to_dict('input.xlsx', columns=['Queries', 'Tier'])
         all_queries = input_data['Queries']
+        all_tiers = input_data['Tier']
         
         if not all_queries:
             print("⚠️ No queries found in input.xlsx")
             return
         
-        print(f"📊 Found {len(all_queries)} queries to process")
+        # Create combined list of (query, tier) tuples
+        combined_query_tier = []
+        for i in range(len(all_queries)):
+            query = all_queries[i]
+            tier = all_tiers[i] if i < len(all_tiers) else ""
+            combined_query_tier.append((query, tier))
+        
+        print(f"📊 Found {len(combined_query_tier)} queries to process")
         print("🚀 Starting optimized update process...\n")
         
         # Global statistics tracking
@@ -282,12 +295,12 @@ def update_daily():
         
         # Process queries in batches for better performance
         batch_size = 20
-        total_batches = math.ceil(len(all_queries) / batch_size)
+        total_batches = math.ceil(len(combined_query_tier) / batch_size)
         
         for batch_num in range(total_batches):
             start_idx = batch_num * batch_size
-            end_idx = min(start_idx + batch_size, len(all_queries))
-            batch_queries = all_queries[start_idx:end_idx]
+            end_idx = min(start_idx + batch_size, len(combined_query_tier))
+            batch_queries = combined_query_tier[start_idx:end_idx]
             
             print(f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_queries)} queries)")
             
@@ -303,12 +316,12 @@ def update_daily():
             stats_lock = Lock()
             
             with ThreadPoolExecutor(max_workers=min(len(batch_queries), 20)) as executor:
-                query_info_list = [(i + start_idx + 1, query) for i, query in enumerate(batch_queries)]
+                query_info_list = [(i + start_idx + 1, query_tier_tuple) for i, query_tier_tuple in enumerate(batch_queries)]
                 futures = {
                     executor.submit(
                         process_single_query_update, 
                         query_info, 
-                        mongo_handler, 
+                        sql_handler, 
                         print_lock, 
                         stats_lock, 
                         batch_results
@@ -346,7 +359,7 @@ def update_daily():
                 time.sleep(1)
         
         # Final comprehensive summary
-        total_db_records = mongo_handler.get_total_records()
+        total_db_records = sql_handler.get_total_records()
         print(f"\n{'='*70}")
         print(f"🎉 DAILY UPDATE COMPLETED SUCCESSFULLY")
         print(f"{'='*70}")
@@ -363,8 +376,8 @@ def update_daily():
         print(f"   Errors encountered: {global_stats['total_errors']}")
         print(f"")
         print(f"🗄️ Database Status:")
-        print(f"   Total records in MongoDB: {total_db_records:,}")
-        print(f"   Database: Jordan, Collection: sales")
+        print(f"   Total records in SQL database: {total_db_records:,}")
+        print(f"   Database: Jordan, Table: sales")
         
         # Success message
         if global_stats['total_inserted'] > 0:
@@ -377,8 +390,8 @@ def update_daily():
     except Exception as e:
         print(f"❌ Fatal error in daily update: {str(e)}")
     finally:
-        mongo_handler.close_connection()
-        print(f"\n🔒 MongoDB connection closed")
+        sql_handler.close_connection()
+        print(f"\n🔒 SQL database connection closed")
 
 if __name__ == "__main__":
     update_daily()
